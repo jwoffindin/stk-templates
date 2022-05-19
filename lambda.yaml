@@ -1,0 +1,52 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+Transform: AWS::Serverless-2016-10-31
+
+Description: |
+  A bucket that responds with pongs when pinged
+
+Metadata:
+  stack:
+    deployed_at: "{{ deploy.timestamp }}"
+    version:
+      template_commit: "{{ deploy.template_sha }}"
+      template_ref: "{{ deploy.template_ref }}"
+      config_commit: "{{ deploy.config_sha }}"
+      config_ref: "{{ deploy.config_ref }}"
+    vars:
+      bucket_name: Name of bucket to create
+      python_lambda_layer_arn: ARN for lambda layer containing required python modules
+  iam_capabilities:
+    - CAPABILITY_IAM
+
+Resources:
+  TestBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: "{{ bucket_name }}"
+
+  EventHandler:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: Process S3 events
+      Handler: index.handler
+      CodeUri: "{{ lambda_uri('s3-event-handler') }}"
+      Runtime: python3.6
+      Events:
+        ObjectCreate:
+          Type: S3
+          Properties:
+            Bucket: !Ref TestBucket
+            Events: s3:ObjectCreated:*
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: suffix
+                    Value: .ping
+      Layers:
+        - "{{ python_lambda_layer_arn }}"
+      MemorySize: 128
+      Timeout: 5
+      Policies:
+      - S3CrudPolicy:
+          BucketName: "{{ bucket_name }}"

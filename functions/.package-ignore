@@ -1,0 +1,7 @@
+# Files we don't want to upload
+.package-ignore
+Makefile
+requriements.txt
+tests/
+.pytest_cache/
+__pycache__/

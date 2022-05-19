@@ -1,0 +1,35 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: |
+  Create "lambda-layers" providing base libraries for lambda functions
+  deployed by this, and related, projects.
+
+  It packages directory tree ./functions/site-packages. These packages
+  are 'vendored' using the Makefile.
+
+Metadata:
+  stack:
+    deployed_at: "{{ deploy.timestamp }}"
+    version:
+      template_commit: "{{ deploy.template_sha }}"
+      template_ref: "{{ deploy.template_ref }}"
+      config_commit: "{{ deploy.config_sha }}"
+      config_ref: "{{ deploy.config_ref }}"
+    vars:
+      bucket_name: Name of bucket to create
+
+Resources:
+  PythonLambdaLayer:
+    Type: AWS::Lambda::LayerVersion
+    UpdateReplacePolicy: Retain
+    Properties:
+      Description: Shared Python libraries
+      CompatibleRuntimes:
+        - python3.8
+        - python3.9
+      Content:
+        S3Bucket: "{{ cfn_bucket }}"
+        S3Key: "{{ upload_zip('functions/site-packages', prefix='python') }}"
+
+Outputs:
+  PythonLayerArn:
+    Value: !Ref PythonLambdaLayer
