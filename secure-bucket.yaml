@@ -1,0 +1,214 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: |
+  An S3 bucket for storing private/sensitive objects:
+
+    * Controls to avoid objects being made public
+    * Enforced Encryption
+    * Strict controls on who can read/write to the bucket
+    * Custom KMS key to support cross-account access to bucket
+
+  This stack is intended to be deployed with 'stk' utility
+  <https://github.com/jwoffindin/stk>
+
+Metadata:
+  stack:
+    deployed_at: "{{ deploy.timestamp }}"
+    deployed_with: "{{ deploy.deployed_with }}"
+    version:
+      template_commit: "{{ deploy.template_sha }}"
+      template_ref: "{{ deploy.template_ref }}"
+      config_commit: "{{ deploy.config_sha }}"
+      config_ref: "{{ deploy.config_ref }}"
+    vars:
+      reader_role_arns: |
+        IAM roles permitted read-access to s3 bucket.
+      writer_role_arns: |
+        IAM roles permitted write-access to S3 bucket.
+  iam_capabilities:
+    - CAPABILITY_IAM
+Resources:
+  S3KmsKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: S3 KMS key
+      EnableKeyRotation: true
+      KeyPolicy:
+          Version: 2012-10-17
+          Id: BucketKeyPolicy
+          Statement:
+            - Sid: Account root access
+              Effect: Allow
+              Resource: "*"
+              Action:
+                - kms:*
+              Principal:
+                AWS: "arn:aws:iam::{{ account_id }}:root"
+            ## if reader_role_arns or writer_role_arns
+            - Sid: Only explicit roles can use key
+              Effect: Allow
+              Resource: "*"
+              Action:
+                - kms:Decrypt
+                - kms:GenerateDataKey
+              Principal:
+                AWS:
+                  ## for arn in (reader_role_arns + writer_role_arns) | unique
+                  - {{ arn }}
+                  ## endfor
+            ## endif
+
+  Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: "{{ bucket_name }}"
+      AccessControl: Private
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              KMSMasterKeyID: !GetAtt S3KmsKey.Arn
+              SSEAlgorithm: aws:kms
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref Bucket
+      PolicyDocument:
+        Statement:
+          - Sid: AuthorizedRolesOnly
+            Effect: Deny
+            NotPrincipal:
+              AWS:
+                ## for role_arn in (reader_role_arns + writer_role_arns) | unique
+                - {{ role_arn }}
+                ## endfor
+            Action:
+              - s3:*
+            Resource:
+              - arn:aws:s3:::{{ bucket_name }}/*
+
+          - Sid: ReadersCanOnlyRead
+            Effect: Deny
+            Principal:
+              AWS:
+                ## for role_arn in reader_role_arns
+                - {{ role_arn }}
+                ## endfor
+            NotAction:
+              - s3:GetObject
+              - s3:HeadObject
+            Resource:
+              - arn:aws:s3:::{{ bucket_name }}/*
+
+          - Sid: WritersCanOnlyWrite
+            Effect: Deny
+            Principal:
+              AWS:
+                ## for role_arn in writer_role_arns
+                - {{ role_arn }}
+                ## endfor
+            NotAction:
+              - s3:PutObject
+            Resource:
+              - arn:aws:s3:::{{ bucket_name }}/*
+
+          - Sid: BucketPermitOnlyAuthRoles
+            Effect: Deny
+            NotPrincipal:
+              AWS:
+                - arn:aws:iam::{{ account_id }}:root
+                ## for role_arn in (reader_role_arns + writer_role_arns) | unique
+                - {{ role_arn }}
+                ## endfor
+            Action:
+              - s3:ListBucket
+              - s3:GetBucketLocation
+              - s3:ListBucketMultipartUploads
+              - s3:ListBucketVersions
+            Resource:
+              - arn:aws:s3:::{{ bucket_name }}
+
+          - Sid: EnsureObjectPutsAreEncrypted
+            Effect: Deny
+            Principal: "*"
+            Action:
+             - s3:PutObject
+            Resource:
+              - arn:aws:s3:::{{ bucket_name }}/*
+            Condition:
+              'Null': { 's3:x-amz-server-side-encryption': true }
+
+          - Sid: PutsRequireSseKms
+            Effect: Deny
+            Principal: "*"
+            Action:
+              - s3:PutObject
+            Resource:
+              - arn:aws:s3:::{{ bucket_name }}/*
+            Condition:
+              StringNotEquals: { 's3:x-amz-server-side-encryption': [ aws:kms ] }
+
+          - Sid: PutRequiresSpecificKmsKey
+            Effect: Deny
+            Principal: "*"
+            Action:
+              - s3:PutObject
+            Resource:
+              - arn:aws:s3:::{{ bucket_name }}/*
+            Condition:
+              StringNotEquals: { 's3:x-amz-server-side-encryption-aws-kms-key-id': [ !GetAtt S3KmsKey.Arn ] }
+
+          - Sid: RequireEncryptedConnections
+            Effect: Deny
+            Principal: "*"
+            Action:
+              - s3:*
+            Resource:
+              - arn:aws:s3:::{{ bucket_name }}/*
+            Condition:
+              Bool: { 'aws:SecureTransport': false }
+
+          - Sid: DenyPublicReadAcl
+            Effect: Deny
+            Principal: "*"
+            Action:
+              - s3:PutBucketAcl
+              - s3:PutObject
+              - s3:PutObjectAcl
+            Resource:
+              - arn:aws:s3:::{{ bucket_name }}
+              - arn:aws:s3:::{{ bucket_name }}/*
+            Condition:
+              StringEquals:
+                's3:x-amz-acl': [ authenticated-read, public-read, public-read-write ]
+
+          - Sid: DenyGrantingPublicRead
+            Effect: Deny
+            Principal: "*"
+            Action:
+              - s3:PutBucketAcl
+              - s3:PutObject
+              - s3:PutObjectAcl
+            Resource:
+              - arn:aws:s3:::{{ bucket_name }}
+              - arn:aws:s3:::{{ bucket_name }}/*
+            Condition:
+              StringLike:
+                's3:x-amz-grant-read':
+                  - '*http://acs.amazonaws.com/groups/global/AllUsers*'
+                  - '*http://acs.amazonaws.com/groups/global/AuthenticatedUsers*'
+
+
+Outputs:
+  BucketName:
+    Value: !Ref Bucket
+  BucketKmsKey:
+    Value: !GetAtt S3KmsKey.Arn
+  Writers:
+    Value: "{{ writer_role_arns | join(',') }}"
+  Readers:
+    Value: "{{ reader_role_arns | join(',') }}"
