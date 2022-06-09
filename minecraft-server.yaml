@@ -1,0 +1,302 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: |
+  Minecraft Spot Price Server via Docker / ECS
+
+Metadata:
+  stack:
+    deployed_at: "{{ deploy.timestamp }}"
+    version:
+      template_commit: "{{ deploy.template_sha }}"
+      template_ref: "{{ deploy.template_ref }}"
+      config_commit: "{{ deploy.config_sha }}"
+      config_ref: "{{ deploy.config_ref }}"
+    iam_capabilities:
+      - CAPABILITY_IAM
+
+Resources:
+  # ------------------------------------------------------------------------------
+  # EFS for persistent data
+  # ------------------------------------------------------------------------------
+  Efs:
+    Type: AWS::EFS::FileSystem
+    Properties:
+      Encrypted: true
+
+  MountA:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref Efs
+      SecurityGroups:
+      - !Ref EfsSg
+      SubnetId: "{{ subnets[0] }}"
+
+  MountB:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref Efs
+      SecurityGroups:
+      - !Ref EfsSg
+      SubnetId: "{{ subnets[1] }}"
+
+  EfsSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "{{ stack_name }}-efs"
+      SecurityGroupIngress:
+      - FromPort: 2049
+        ToPort: 2049
+        IpProtocol: tcp
+        SourceSecurityGroupId: !Ref Ec2Sg
+      VpcId: {{ vpc_id }}
+
+  # ------------------------------------------------------------------------------
+  # ECS resources
+  # ------------------------------------------------------------------------------
+  Ec2Sg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "{{ stack_name }}-ec2"
+      SecurityGroupIngress:
+        ## for cidr, description in ssh_allowed_cidrs.items():
+        - { FromPort: 22, ToPort: 22, IpProtocol: tcp, CidrIp: {{ cidr }}, Description: {{ description }} }
+        ## endfor
+
+        ## for cidr, description in allowed_cidrs.items():
+        - { FromPort: 25565, ToPort: 25565, IpProtocol: tcp, CidrIp: {{ cidr }}, Description: {{ description }} }
+        ## endfor
+      VpcId: {{ vpc_id }}
+
+  LaunchConfiguration:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      AssociatePublicIpAddress: true
+      IamInstanceProfile: !Ref InstanceProfile
+      ImageId: {{ ami }}
+      InstanceType: {{ instance_type }}
+      ## if key_name is defined
+      KeyName: "{{ key_name }}"
+      ## endif
+      SecurityGroups: [ !Ref Ec2Sg ]
+      ## if spot_price
+      SpotPrice: {{ spot_price }}
+      ## endif
+      UserData: {{ user_data('minecraft-server')}}
+
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    DependsOn:
+      - MountA
+      - MountB
+    Properties:
+      AutoScalingGroupName: "{{ stack_name }}-asg"
+      DesiredCapacity: {{ 1 if running else 0 }}
+      LaunchConfigurationName: !Ref LaunchConfiguration
+      NewInstancesProtectedFromScaleIn: true
+      MaxSize: 1
+      MinSize: 0
+      VPCZoneIdentifier: {{ subnets }}
+    ## if hosted_zone_id is defined
+    Metadata:
+      LaunchEvent: !GetAtt LaunchEvent.Arn
+    ## endif
+
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - ec2.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref InstanceRole
+
+  EcsCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: "{{ stack_name }}-cluster"
+      ## if insights_enabled
+      ClusterSettings:
+        - Name: containerInsights
+          Value: enabled
+      ## endif
+
+  ECSCapacityProvider:
+    Type: AWS::ECS::CapacityProvider
+    Properties:
+      AutoScalingGroupProvider:
+        AutoScalingGroupArn: !Ref AutoScalingGroup
+        ManagedScaling:
+          MaximumScalingStepSize: 1
+          MinimumScalingStepSize: 1
+          Status: ENABLED
+          TargetCapacity: 100
+        ManagedTerminationProtection: ENABLED
+
+  EcsClusterCapacityProviderAssociation:
+    Type: AWS::ECS::ClusterCapacityProviderAssociations
+    Properties:
+      Cluster: !Ref EcsCluster
+      CapacityProviders:
+        - !Ref ECSCapacityProvider
+      DefaultCapacityProviderStrategy:
+        - { CapacityProvider: !Ref ECSCapacityProvider, Weight: 1 }
+
+  EcsService:
+    Type: AWS::ECS::Service
+    Properties:
+      Cluster: !Ref EcsCluster
+      DesiredCount: {{ 1 if running else 0 }}
+      ServiceName: "{{ stack_name }}-ecs-service"
+      TaskDefinition: !Ref EcsTask
+      CapacityProviderStrategy:
+        - CapacityProvider: !Ref ECSCapacityProvider
+          Weight: 1
+          Base: 0
+      DeploymentConfiguration:
+        MaximumPercent: 100
+        MinimumHealthyPercent: 0
+
+  EcsTask:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Volumes:
+      - Host:
+          SourcePath: /opt/minecraft
+        Name: minecraft
+      NetworkMode: "bridge"
+      ContainerDefinitions:
+        - Name: minecraft
+          MemoryReservation: 1024
+          Image: "{{ container_image }}"
+          PortMappings:
+            - { ContainerPort: 25565, HostPort: 25565, Protocol: tcp }
+
+          ## if entrypoint is defined
+          EntryPoint: "{{ entrypoint }}"
+          ## endif
+
+          ## if command is defined
+          Command: "{{ command }}"
+          ## endif
+
+          ## if log_group is defined
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: {{ log_group }}
+              ## if log_group_prefix is defined
+              awslogs-stream-prefix: {{ log_group_prefix }}
+              ## endif
+              awslogs-region: "{{ aws_region }}"
+              awslogs-create-group: true
+          ## endif
+
+          MountPoints:
+            - { ContainerPath: /data, SourceVolume: minecraft, ReadOnly: false}
+          Environment:
+            - Name: "EULA"
+              Value: "TRUE"
+            ## for key, value in minecraft_options.items() if value and value != "None"
+            - Name: "{{ key | upper }}"
+              Value: "{{ value }}"
+            ## endfor
+
+  ## if log_group is defined
+  CloudWatchLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: {{ log_group }}
+      RetentionInDays: {{ log_group_retention | default(60) }}
+  ## endif
+
+  # ------------------------------------------------------------------------------
+  # DNS Management
+  # ------------------------------------------------------------------------------
+
+  ## if hosted_zone_id is defined
+  SetDNSRecordLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+              - lambda.amazonaws.com
+          Action:
+            - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: root
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - route53:ChangeResourceRecordSets
+                Resource: "arn:aws:route53:::hostedzone/{{ hosted_zone_id }}"
+              - Effect: Allow
+                Action:
+                  - ec2:DescribeInstance*
+                Resource: "*"
+
+  SetDNSRecordLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: "{{ stack_name }}-set-dns"
+      Description: Manage Route 53 DNS Record for Minecraft
+      Code: {{ lambda_code('minecraft-server') }}
+      Handler: index.handler
+      MemorySize: 128
+      Role: !GetAtt SetDNSRecordLambdaRole.Arn
+      Runtime: python3.7
+      Timeout: 20
+      Environment:
+        Variables:
+          HostedZoneId: "{{ hosted_zone_id }}"
+          RecordName: "{{ fqdn }}"
+
+  LaunchEvent:
+    Type: AWS::Events::Rule
+    Properties:
+      EventPattern:
+        source:
+          - aws.autoscaling
+        detail-type:
+          - EC2 Instance Launch Successful
+        detail:
+          AutoScalingGroupName:
+            - "{{ stack_name }}-asg"
+      Name: "{{ stack_name }}-instance-launch"
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt SetDNSRecordLambda.Arn
+          Id: "{{ stack_name }}-set-dns"
+
+  LaunchEventLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt SetDNSRecordLambda.Arn
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt LaunchEvent.Arn
+  ## endif
+
+Outputs:
+  CheckInstanceIp:
+    Description: To find your Minecraft instance IP address, visit the following link. Click on the instance to find its Public IP address.
+    Value: !Sub "https://${AWS::Region}.console.aws.amazon.com/ec2/v2/home?region=${AWS::Region}#Instances:tag:aws:autoscaling:groupName=${AutoScalingGroup};sort=tag:Name"
