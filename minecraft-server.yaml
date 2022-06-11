@@ -297,6 +297,18 @@ Resources:
   ## endif
 
 Outputs:
+  ## if hosted_zone_id
+  Hostname:
+    Value: "{{ fqdn }}"
+  ## else
   CheckInstanceIp:
     Description: To find your Minecraft instance IP address, visit the following link. Click on the instance to find its Public IP address.
     Value: !Sub "https://${AWS::Region}.console.aws.amazon.com/ec2/v2/home?region=${AWS::Region}#Instances:tag:aws:autoscaling:groupName=${AutoScalingGroup};sort=tag:Name"
+  ## endif
+  IngressSecurityGroupId:
+    Description: Security group clients should be added to
+    Value: !Ref Ec2Sg
+  AutoscalingGroupId:
+    Value: !Ref AutoScalingGroup
+  EcsServiceId:
+    Value: !Ref EcsService
