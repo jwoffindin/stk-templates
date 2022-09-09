@@ -1,0 +1,117 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: |
+  Creates an Application Load Balancer that routes HTTP ("{{ service_port }}")
+  requests to backend services.
+
+Metadata:
+  parameters:
+    vpc_id: VPC into which ALB is being deployed into
+    subnets: List of subnet IDs for logic layer
+    dns_private_zone: DNS Zone for the Private resources. The zone must end in a '.'
+    access_log_bucket: If set, load balancer will send access logs to this bucket
+    dns_ttl: Default 900
+    service_port: Port to expose on load balancer (e.g. 8080)
+
+Resources:
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "{{ stack_name }} ALB Security Group"
+      SecurityGroupIngress:
+        ## if ingresses is defined and ingresses:
+        ## for ingress in ingresses:
+        - FromPort: {{ service_port }}
+          ToPort: {{ service_port }}
+          ## if ingress.source.startswith('sg-')
+          SourceSecurityGroupId: {{ source }}
+          ## elif ingress.source.startswith('vpc-')
+          CidrIp: {{ resource_cidr(ingress.source) }}
+          ## else
+          CidrIp: {{ ingress.source }}
+          ## endif
+          Description: "{{ ingress.description }}"
+          IpProtocol: tcp
+        ## endfor
+        ## endif
+      SecurityGroupEgress:
+        - FromPort: 65535
+          ToPort: 65535
+          CidrIp: 0.0.0.0/32
+          Description: No traffic
+          IpProtocol: -1
+      VpcId: {{ vpc_id }}
+      Tags:
+        - Key: Name
+          Value: "{{ stack_name }}-alb-sg"
+
+  Alb:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: "{{ stack_name }}-alb"
+      Type: application
+      SecurityGroups: [ !Ref SecurityGroup ]
+      Subnets: {{ public_subnets if external else private_subnets }}
+      Scheme: "{{ 'external' if external else 'internal' }}"
+      ## if access_log_bucket is defined and access_log_bucket|length
+      LoadBalancerAttributes:
+        - Key: access_logs.s3.enabled
+          Value: true
+        - Key: access_logs.s3.prefix
+          Value: '{{ stack_name }}'
+        - Key: access_logs.s3.bucket
+          Value: {{ access_log_bucket }}
+      ## endif
+
+  DefaultTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      # Name: 'default-{{ service_name }}-tg'
+      Port: "{{ service_port }}"
+      Protocol: HTTP
+      VpcId: {{ vpc_id }}
+
+  Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+      - Type: forward
+        TargetGroupArn: !Ref DefaultTargetGroup
+      LoadBalancerArn: !Ref Alb
+      Port: "{{ service_port }}"
+      Protocol: HTTP
+
+  ## if dns_private_zone is defined
+  DnsZone:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      Comment: "{{ service_name }}"
+      HostedZoneName: {{ dns_private_zone }}
+      Name: '{{ load_balancer_cname }}'
+      Type: CNAME
+      TTL: {{ dns_ttl | default(900) }}
+      ResourceRecords: [ !GetAtt Alb.DNSName ]
+  ## endif
+
+Outputs:
+  CanonicalName:
+    Description: ALB Canonical name
+    Value: !GetAtt Alb.DNSName
+  Name:
+    Description: Application Load Balancer Name
+    Value: !GetAtt Alb.LoadBalancerFullName
+  SecurityGroup:
+    Description: Application Load Balancer Security Group
+    Value: !Ref SecurityGroup
+  AlbArn:
+    Description: Application Load Balancer ARN
+    Value: !Ref Alb
+  ListenerArn:
+    Description: ELB Listener ARN associated with ALB
+    Value: !Ref Listener
+  ## if dns_private_zone is defined
+  PrivateHostname:
+    Description: PrivateDnsHostname for load balance
+    Value: '{{ load_balancer_cname }}'
+  ## endif
+
+
