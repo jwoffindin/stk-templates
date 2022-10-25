@@ -1,0 +1,20 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Description: |
+  AWS OIDC provider for GitLab (gitlab.com)
+
+  One instance of this should be deployed per account.
+
+Resources:
+  GitlabOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Properties:
+      Url: https://gitlab.com
+      ClientIdList:
+        - https://gitlab.com
+      # !!! Note: This expires in 2025
+      ThumbprintList: [b3dd7606d2b5a8b4a13771dbecc9ee1cecafa38a]
+
+Outputs:
+  OidcArn:
+    Value: !Ref GitlabOidcProvider
