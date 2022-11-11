@@ -1,0 +1,4 @@
+---
+description: |
+  Creates a vpc with public/private subnets, route tables etc
+config:
