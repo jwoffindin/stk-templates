@@ -1,9 +1,22 @@
 AWSTemplateFormatVersion: 2010-09-09
 
 Description: |
-  AWS OIDC provider for GitLab (gitlab.com)
+  This template creates an AWS OIDC provider resource specifically for
+  GitLab.
 
-  One instance of this should be deployed per account.
+  One instance of this should be deployed per account where we want to
+  establish a trust relationship - primarily so specific pipelines can
+  assume a specific AWS role.
+
+Metadata:
+  stack:
+    deployed_at: "{{ deploy.timestamp }}"
+    deployed_with: "{{ deploy.deployed_with }}"
+    version:
+      template_commit: "{{ deploy.template_sha }}"
+      template_ref: "{{ deploy.template_ref }}"
+      config_commit: "{{ deploy.config_sha }}"
+      config_ref: "{{ deploy.config_ref }}"
 
 Resources:
   GitlabOidcProvider:
@@ -18,3 +31,4 @@ Resources:
 Outputs:
   OidcArn:
     Value: !Ref GitlabOidcProvider
+

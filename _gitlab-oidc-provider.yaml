@@ -1,0 +1,10 @@
+---
+description: |
+  This template creates an AWS OIDC provider resource specifically for
+  GitLab.
+
+  One instance of this should be deployed per account where we want to
+  establish a trust relationship between our gitlab pipelines and AWS
+config:
+  vars:
+    provider: gitlab
