@@ -1,0 +1,31 @@
+---
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: |
+  Route53 hosted zone for a domain. Outputs the zone ID (for other stacks
+  to create records in) and name servers (for delegation at your registrar).
+
+Metadata:
+  stack:
+    deployed_at: "{{ deploy.timestamp }}"
+    version:
+      template_commit: "{{ deploy.template_sha }}"
+      template_ref: "{{ deploy.template_ref }}"
+      config_commit: "{{ deploy.config_sha }}"
+      config_ref: "{{ deploy.config_ref }}"
+    vars:
+      domain_name: Root domain for the hosted zone (e.g. get-upright.app)
+
+Resources:
+  HostedZone:
+    Type: AWS::Route53::HostedZone
+    Properties:
+      Name: "{{ domain_name.rstrip('.') }}."
+
+Outputs:
+  ZoneId:
+    Description: ID of the hosted zone - use this in other stacks to create records
+    Value: !Ref HostedZone
+  NameServers:
+    Description: Comma-separated name servers - provide these to your registrar for delegation
+    Value: !Join [",", !GetAtt HostedZone.NameServers]
