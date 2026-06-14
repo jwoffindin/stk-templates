@@ -5,7 +5,7 @@ import re
 import boto3
 
 SNS_TOPIC_ARN = os.environ["SNS_TOPIC_ARN"]
-ALLOWED_ORIGIN = os.environ["ALLOWED_ORIGIN"]
+ALLOWED_ORIGINS = os.environ["ALLOWED_ORIGINS"].split()
 
 sns = boto3.client("sns")
 
@@ -16,7 +16,7 @@ def handler(event, _context):
     headers = event.get("headers") or {}
     origin = headers.get("origin", "")
 
-    if ALLOWED_ORIGIN not in origin:
+    if not any(o in origin for o in ALLOWED_ORIGINS):
         return {
             "statusCode": 403,
             "headers": {"Content-Type": "application/json"},

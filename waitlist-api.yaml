@@ -16,7 +16,7 @@ Metadata:
       config_ref: "{{ deploy.config_ref }}"
     vars:
       notification_email: Email address to forward waitlist submissions to
-      allowed_origin: CORS origin to allow (e.g. https://example.com)
+      allowed_origins: Space-separated CORS origins to allow
     iam_capabilities:
       - CAPABILITY_IAM
 
@@ -45,7 +45,7 @@ Resources:
       Environment:
         Variables:
           SNS_TOPIC_ARN: !Ref WaitlistTopic
-          ALLOWED_ORIGIN: "{{ allowed_origin }}"
+          ALLOWED_ORIGINS: "{{ allowed_origins }}"
       Events:
         PostWaitlist:
           Type: HttpApi
@@ -66,7 +66,9 @@ Resources:
     Properties:
       CorsConfiguration:
         AllowOrigins:
-          - "{{ allowed_origin }}"
+          ## for origin in allowed_origins.split():
+          - "{{ origin }}"
+          ## endfor
         AllowMethods:
           - POST
           - OPTIONS
