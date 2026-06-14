@@ -1,0 +1,85 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+Transform: AWS::Serverless-2016-10-31
+
+Description: |
+  Serverless waitlist endpoint. Receives email submissions via POST /waitlist,
+  validates, and forwards to an SNS topic with email subscription.
+
+Metadata:
+  stack:
+    deployed_at: "{{ deploy.timestamp }}"
+    version:
+      template_commit: "{{ deploy.template_sha }}"
+      template_ref: "{{ deploy.template_ref }}"
+      config_commit: "{{ deploy.config_sha }}"
+      config_ref: "{{ deploy.config_ref }}"
+    vars:
+      notification_email: Email address to forward waitlist submissions to
+      allowed_origin: CORS origin to allow (e.g. https://example.com)
+    iam_capabilities:
+      - CAPABILITY_IAM
+
+Resources:
+  WaitlistTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: "{{ stack_name }}-waitlist"
+
+  TopicSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref WaitlistTopic
+      Protocol: email
+      Endpoint: "{{ notification_email }}"
+
+  WaitlistFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: Receives waitlist email submissions, validates, publishes to SNS
+      Handler: index.handler
+      CodeUri: "{{ lambda_uri('waitlist_api') }}"
+      Runtime: python3.12
+      Architectures:
+        - arm64
+      Environment:
+        Variables:
+          SNS_TOPIC_ARN: !Ref WaitlistTopic
+          ALLOWED_ORIGIN: "{{ allowed_origin }}"
+      Events:
+        PostWaitlist:
+          Type: HttpApi
+          Properties:
+            Path: /waitlist
+            Method: POST
+            ApiId: !Ref WaitlistApi
+      Policies:
+        - SNSPublishMessagePolicy:
+            TopicName: !GetAtt WaitlistTopic.TopicName
+      MemorySize: 128
+      Timeout: 5
+      Tags:
+        Environment: "{{ environment }}"
+
+  WaitlistApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      CorsConfiguration:
+        AllowOrigins:
+          - "{{ allowed_origin }}"
+        AllowMethods:
+          - POST
+          - OPTIONS
+        AllowHeaders:
+          - Content-Type
+          - Origin
+
+Outputs:
+  ApiEndpoint:
+    Description: API Gateway endpoint URL
+    Value: !Sub
+      - "https://${ApiId}.execute-api.${AWS::Region}.amazonaws.com"
+      - ApiId: !Ref WaitlistApi
+  WaitlistTopicArn:
+    Description: SNS Topic ARN
+    Value: !Ref WaitlistTopic
